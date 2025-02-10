@@ -43,8 +43,8 @@ async def start_handler(client, message):
 async def login_handler(client, message):
     await message.reply_text("Send your Pyrogram string session:")
 
-    # Wait for user response with string session
-    user_response = await client.listen(message.chat.id)
+    # Wait for user response in private chat
+    user_response = await bot.listen(message.chat.id, filters=filters.text)
 
     string_session = user_response.text.strip()
     
@@ -54,6 +54,7 @@ async def login_handler(client, message):
         await message.reply_text(f"✅ Logged in as {userbot.me.first_name} ({userbot.me.id})")
     except Exception as e:
         await message.reply_text(f"❌ Login failed: {str(e)}")
+
 
 @bot.on_message(filters.command("accounts"))
 async def accounts_handler(client, message):
