@@ -25,7 +25,7 @@ bot = Client("bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
 # Store active user sessions
 active_sessions = {}
 
-# Helper function to start user session
+# Function to start a user session
 async def start_user_session(user_id, session_string):
     user_client = Client(name=str(user_id), session_string=session_string, api_id=API_ID, api_hash=API_HASH)
 
@@ -49,7 +49,7 @@ async def start_user_session(user_id, session_string):
 async def start_handler(client, message):
     await message.reply_text("Welcome! Use `/login` to add an account.")
 
-# Login Command
+# Login Command (Fixed)
 @bot.on_message(filters.command("login"))
 async def login_handler(client, message):
     user_id = message.from_user.id
@@ -58,10 +58,8 @@ async def login_handler(client, message):
         "Use [String Session Generator](https://t.me/SessionGeneratorBot) to create one."
     )
 
-    def check_session(msg):
-        return msg.from_user.id == user_id and msg.text
-
-    session_msg = await client.listen(message.chat.id, filters=check_session)
+    # Wait for user response (Fix)
+    session_msg = await client.listen(message.chat.id, filters=filters.text)
     session_string = session_msg.text
 
     # Save session in MongoDB
@@ -126,4 +124,5 @@ async def logout_handler(client, message):
 
 # Run bot
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG)
     bot.run()
