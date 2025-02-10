@@ -1,9 +1,9 @@
 import os
+import json
 import logging
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pymongo import MongoClient
 
 # Load environment variables
 load_dotenv()
@@ -12,14 +12,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = "auto_reply_bot"
 
-# MongoDB setup
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client[DB_NAME]
-accounts_collection = db["accounts"]
-settings_collection = db["settings"]
+# File paths for storage
+ACCOUNTS_FILE = "accounts.json"
+SETTINGS_FILE = "settings.json"
 
 # Configure logging (Only errors)
 logging.basicConfig(
@@ -33,6 +29,25 @@ bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # Dictionary to track login states
 user_sessions = {}
+
+
+# Helper functions to manage storage
+def load_json(filename, default_data):
+    if not os.path.exists(filename):
+        with open(filename, "w") as f:
+            json.dump(default_data, f)
+    with open(filename, "r") as f:
+        return json.load(f)
+
+
+def save_json(filename, data):
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+# Load accounts and settings from storage
+accounts = load_json(ACCOUNTS_FILE, [])
+settings = load_json(SETTINGS_FILE, {"group": "", "dm": ""})
 
 
 async def start_userbot(string_session):
@@ -70,7 +85,9 @@ async def session_receiver(client: Client, message: Message):
 
         try:
             userbot = await start_userbot(string_session)
-            accounts_collection.insert_one({"user_id": userbot.me.id, "string_session": string_session})
+            accounts.append({"user_id": userbot.me.id, "string_session": string_session})
+            save_json(ACCOUNTS_FILE, accounts)  # Save accounts to JSON
+
             await message.reply_text(f"✅ Logged in as {userbot.me.first_name} ({userbot.me.id})")
         except Exception as e:
             logging.error(f"Login failed: {str(e)}")
@@ -83,10 +100,8 @@ async def session_receiver(client: Client, message: Message):
 async def accounts_handler(client: Client, message: Message):
     """Lists all logged-in accounts."""
     try:
-        accounts = accounts_collection.find({})
-        account_list = [f"{acc['user_id']}" for acc in accounts]
-
-        if account_list:
+        if accounts:
+            account_list = [f"{acc['user_id']}" for acc in accounts]
             await message.reply_text("📝 **Logged-in Accounts:**\n" + "\n".join(account_list))
         else:
             await message.reply_text("❌ No accounts logged in.")
@@ -94,39 +109,42 @@ async def accounts_handler(client: Client, message: Message):
         logging.error(f"Error in /accounts command: {str(e)}")
 
 
-@bot.on_message(filters.command("setgroup", prefixes="/"))
+@bot.on_message(filters.command("setgroup"))
 async def set_group_handler(client: Client, message: Message):
     """Sets auto-reply message for group mentions."""
     logging.error("Received /setgroup command")  # Debug log
-    
+
     try:
         text = message.text.split(maxsplit=1)
         if len(text) < 2:
             await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
             return
 
-        settings_collection.update_one({"type": "group"}, {"$set": {"message": text[1]}}, upsert=True)
+        settings["group"] = text[1]
+        save_json(SETTINGS_FILE, settings)
+
         await message.reply_text("✅ Auto-reply for groups set successfully!")
     except Exception as e:
         logging.error(f"Error in /setgroup command: {str(e)}")
 
 
-@bot.on_message(filters.command("setdm", prefixes="/"))
+@bot.on_message(filters.command("setdm"))
 async def set_dm_handler(client: Client, message: Message):
     """Sets auto-reply message for direct messages."""
     logging.error("Received /setdm command")  # Debug log
-    
+
     try:
         text = message.text.split(maxsplit=1)
         if len(text) < 2:
             await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
             return
 
-        settings_collection.update_one({"type": "dm"}, {"$set": {"message": text[1]}}, upsert=True)
+        settings["dm"] = text[1]
+        save_json(SETTINGS_FILE, settings)
+
         await message.reply_text("✅ Auto-reply for DMs set successfully!")
     except Exception as e:
         logging.error(f"Error in /setdm command: {str(e)}")
-
 
 
 @bot.on_message(filters.command("logout"))
@@ -134,19 +152,16 @@ async def logout_handler(client: Client, message: Message):
     """Logs out a user account."""
     try:
         text = message.text.split()
-
         if len(text) < 2:
             await message.reply_text("❌ Please provide a user ID. Usage: `/logout user_id`")
             return
 
         user_id = int(text[1])
-        account = accounts_collection.find_one({"user_id": user_id})
+        global accounts
+        accounts = [acc for acc in accounts if acc["user_id"] != user_id]
+        save_json(ACCOUNTS_FILE, accounts)  # Save updated account list
 
-        if account:
-            accounts_collection.delete_one({"user_id": user_id})
-            await message.reply_text(f"✅ Logged out {user_id} successfully!")
-        else:
-            await message.reply_text("❌ No account found with this ID.")
+        await message.reply_text(f"✅ Logged out {user_id} successfully!")
     except Exception as e:
         logging.error(f"Error in /logout command: {str(e)}")
 
