@@ -141,14 +141,16 @@ async def process_private_text(client, message):
             return
 
 # Group message handler
-# When a group message (exactly) equals a saved keyword (case\\-insensitive), send the saved message.
+# When a group message (exactly) equals a saved keyword (case-insensitive), send the saved message.
 @bot.on_message(filters.group & filters.text)
 async def group_message_handler(client, message):
     incoming = message.text.strip().lower()
+    print(f"Incoming message in group: {incoming}")  # Debugging: log incoming messages
     if incoming in saved_messages:
         entry = saved_messages[incoming]
         account_client = entry["account"]
         text_to_send = entry["message"]
+        print(f"Found saved message for keyword '{incoming}': {text_to_send}")  # Debugging: log the saved message
         try:
             await account_client.send_message(message.chat.id, text_to_send)
         except FloodWait as e:
