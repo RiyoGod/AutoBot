@@ -39,7 +39,7 @@ async def login_command(client, message):
         "    print(app.export_session_string())\n"
         "```\n"
         "Replace API_ID and API_HASH with your credentials.",
-        parse_mode="markdownv2"
+        parse_mode="html"
     )
     pending_login[chat_id] = message.from_user.id
 
@@ -50,19 +50,19 @@ async def save_command(client, message):
     user_id = message.from_user.id
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply("Usage: `/save <keyword>`\nExample: `/save HI`", parse_mode="markdownv2")
+        await message.reply("Usage: `/save <keyword>`\nExample: `/save HI`", parse_mode="html")
         return
     keyword = args[1].strip()
     user_accounts = logged_in_accounts.get(user_id, [])
     if not user_accounts:
-        await message.reply("You have no logged in accounts\\. Please use `/login` first\\.", parse_mode="markdownv2")
+        await message.reply("You have no logged in accounts\\. Please use `/login` first\\.", parse_mode="html")
         return
     if len(user_accounts) == 1:
         # Use the only logged in account.
         pending_save[chat_id] = {"keyword": keyword, "account": user_accounts[0]}
         await message.reply(
             f"Using your only logged in account\\. Now send me the message content to be saved for keyword *{keyword}*\\.",
-            parse_mode="markdownv2"
+            parse_mode="html"
         )
     else:
         # Multiple accounts: ask the user to choose one.
@@ -74,7 +74,7 @@ async def save_command(client, message):
             except Exception:
                 text += f"{i}. Unknown Account\n"
         pending_save[chat_id] = {"keyword": keyword, "account": None, "accounts": user_accounts, "step": "choose_account"}
-        await message.reply(text, parse_mode="markdownv2")
+        await message.reply(text, parse_mode="html")
 
 # Process private text messages (for pending login or pending save)
 @bot.on_message(filters.private & filters.text)
@@ -94,11 +94,11 @@ async def process_private_text(client, message):
         try:
             await new_client.start()
         except Exception as e:
-            await message.reply(f"Failed to log in with the provided session string\\. Error: {e}", parse_mode="markdownv2")
+            await message.reply(f"Failed to log in with the provided session string\\. Error: {e}", parse_mode="html")
             del pending_login[chat_id]
             return
         logged_in_accounts.setdefault(user_id, []).append(new_client)
-        await message.reply("Successfully logged in your account\\!", parse_mode="markdownv2")
+        await message.reply("Successfully logged in your account\\!", parse_mode="html")
         del pending_login[chat_id]
         return
 
@@ -110,18 +110,18 @@ async def process_private_text(client, message):
             try:
                 choice = int(message.text.strip())
             except ValueError:
-                await message.reply("Please send a valid number corresponding to the account\\.", parse_mode="markdownv2")
+                await message.reply("Please send a valid number corresponding to the account\\.", parse_mode="html")
                 return
             accounts_list = data.get("accounts", [])
             if choice < 1 or choice > len(accounts_list):
-                await message.reply("Invalid choice\\. Please send a valid number corresponding to the account\\.", parse_mode="markdownv2")
+                await message.reply("Invalid choice\\. Please send a valid number corresponding to the account\\.", parse_mode="html")
                 return
             chosen_account = accounts_list[choice - 1]
             data["account"] = chosen_account
             data["step"] = "await_message"
             await message.reply(
                 f"Account selected\\. Now send me the message content to be saved for keyword *{data['keyword']}*\\.",
-                parse_mode="markdownv2"
+                parse_mode="html"
             )
             return
         else:
@@ -129,7 +129,7 @@ async def process_private_text(client, message):
             keyword = data["keyword"]
             chosen_account = data["account"]
             saved_messages[keyword.lower()] = {"account": chosen_account, "message": message.text}
-            await message.reply(f"Saved message for keyword *{keyword}*\\.", parse_mode="markdownv2")
+            await message.reply(f"Saved message for keyword *{keyword}*\\.", parse_mode="html")
             del pending_save[chat_id]
             return
 
