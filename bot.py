@@ -22,17 +22,25 @@ db = mongo_client[DB_NAME]
 accounts_collection = db["accounts"]
 settings_collection = db["settings"]
 
-# Configure logging (Only errors, no unnecessary logs)
+# Configure essential logging (Only errors and important events)
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
+# Custom debug logger
+debug_logger = logging.getLogger("debug")
+debug_logger.setLevel(logging.INFO)
+debug_handler = logging.FileHandler("debug.log")
+debug_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+debug_logger.addHandler(debug_handler)
 
 # Create bot client
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # Dictionary to track login states
 user_sessions = {}
+userbots = {}  # Stores active userbot clients
 
 
 async def start_userbot(string_session):
@@ -40,14 +48,18 @@ async def start_userbot(string_session):
     try:
         userbot = Client(name="userbot", session_string=string_session, api_id=API_ID, api_hash=API_HASH)
         await userbot.start()
+        me = await userbot.get_me()
+        debug_logger.info(f"Userbot started for {me.first_name} ({me.id})")
         return userbot
     except Exception as e:
+        debug_logger.error(f"Userbot startup failed: {str(e)}")
         raise RuntimeError(f"Userbot startup failed: {str(e)}")
 
 
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     """Handles /start command."""
+    debug_logger.info(f"User {message.from_user.id} used /start")
     await message.reply_text("Welcome! Use /login to add an account.")
 
 
@@ -55,6 +67,7 @@ async def start_command(client: Client, message: Message):
 async def login_handler(client: Client, message: Message):
     """Handles user login request."""
     user_id = message.from_user.id
+    debug_logger.info(f"User {user_id} initiated login.")
     await message.reply_text("Send your Pyrogram string session now:")
     user_sessions[user_id] = True  # Track user state
 
@@ -69,10 +82,15 @@ async def session_receiver(client: Client, message: Message):
 
         try:
             userbot = await start_userbot(string_session)
-            accounts_collection.insert_one({"user_id": userbot.me.id, "string_session": string_session})
-            await message.reply_text(f"✅ Logged in as {userbot.me.first_name} ({userbot.me.id})")
+            me = await userbot.get_me()
+            accounts_collection.insert_one({"user_id": me.id, "string_session": string_session})
+            userbots[me.id] = userbot  # Store active session
+
+            await message.reply_text(f"✅ Logged in as {me.first_name} ({me.id})")
+            debug_logger.info(f"User {me.id} logged in successfully.")
         except Exception as e:
             await message.reply_text(f"❌ Login failed: {str(e)}")
+            debug_logger.error(f"Login failed for user {user_id}: {str(e)}")
 
         del user_sessions[user_id]  # Remove user from tracking
 
@@ -80,6 +98,8 @@ async def session_receiver(client: Client, message: Message):
 @bot.on_message(filters.command("accounts"))
 async def accounts_handler(client: Client, message: Message):
     """Lists all logged-in accounts."""
+    debug_logger.info(f"User {message.from_user.id} used /accounts")
+    
     accounts = accounts_collection.find({})
     account_list = [f"{acc['user_id']}" for acc in accounts]
 
@@ -99,6 +119,7 @@ async def set_group_handler(client: Client, message: Message):
         return
 
     settings_collection.update_one({"type": "group"}, {"$set": {"message": text[1]}}, upsert=True)
+    debug_logger.info(f"User {message.from_user.id} set group auto-reply.")
     await message.reply_text("✅ Auto-reply for groups set successfully!")
 
 
@@ -112,6 +133,7 @@ async def set_dm_handler(client: Client, message: Message):
         return
 
     settings_collection.update_one({"type": "dm"}, {"$set": {"message": text[1]}}, upsert=True)
+    debug_logger.info(f"User {message.from_user.id} set DM auto-reply.")
     await message.reply_text("✅ Auto-reply for DMs set successfully!")
 
 
@@ -129,6 +151,13 @@ async def logout_handler(client: Client, message: Message):
 
     if account:
         accounts_collection.delete_one({"user_id": user_id})
+        
+        # Stop and remove userbot session
+        if user_id in userbots:
+            await userbots[user_id].stop()
+            del userbots[user_id]
+        
+        debug_logger.info(f"User {user_id} logged out successfully.")
         await message.reply_text(f"✅ Logged out {user_id} successfully!")
     else:
         await message.reply_text("❌ No account found with this ID.")
