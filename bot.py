@@ -72,12 +72,20 @@ async def account_worker(session_name):
             incoming_text = message.text.strip().lower()
             if incoming_text in saved_messages and saved_messages[incoming_text]:
                 text_to_send = saved_messages[incoming_text]
-                try:
-                    # Send the saved message in the group
-                    await message.reply(text_to_send)
-                    print(f"Sent saved message for '{incoming_text}' in group.")
-                except Exception as e:
-                    print(f"Error sending saved message in group: {e}")
+                
+                # Debug: Print the message to be sent
+                print(f"Attempting to send saved message for keyword '{incoming_text}': {text_to_send}")
+
+                # Ensure the message is within the character limit
+                if len(text_to_send) <= 4096:
+                    try:
+                        # Send the saved message in the group
+                        await message.reply(text_to_send)
+                        print(f"Sent saved message for '{incoming_text}' in group.")
+                    except Exception as e:
+                        print(f"Error sending saved message in group: {e}")
+                else:
+                    print("Message exceeds the length limit of 4096 characters.")
 
 # Start listening for groups and checking for keywords
 async def start_account_listeners():
