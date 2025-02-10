@@ -94,12 +94,13 @@ async def accounts_handler(client: Client, message: Message):
         logging.error(f"Error in /accounts command: {str(e)}")
 
 
-@bot.on_message(filters.command("setgroup"))
+@bot.on_message(filters.command("setgroup", prefixes="/"))
 async def set_group_handler(client: Client, message: Message):
     """Sets auto-reply message for group mentions."""
+    logging.error("Received /setgroup command")  # Debug log
+    
     try:
         text = message.text.split(maxsplit=1)
-
         if len(text) < 2:
             await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
             return
@@ -110,12 +111,13 @@ async def set_group_handler(client: Client, message: Message):
         logging.error(f"Error in /setgroup command: {str(e)}")
 
 
-@bot.on_message(filters.command("setdm"))
+@bot.on_message(filters.command("setdm", prefixes="/"))
 async def set_dm_handler(client: Client, message: Message):
     """Sets auto-reply message for direct messages."""
+    logging.error("Received /setdm command")  # Debug log
+    
     try:
         text = message.text.split(maxsplit=1)
-
         if len(text) < 2:
             await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
             return
@@ -124,6 +126,7 @@ async def set_dm_handler(client: Client, message: Message):
         await message.reply_text("✅ Auto-reply for DMs set successfully!")
     except Exception as e:
         logging.error(f"Error in /setdm command: {str(e)}")
+
 
 
 @bot.on_message(filters.command("logout"))
