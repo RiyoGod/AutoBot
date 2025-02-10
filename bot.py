@@ -19,6 +19,11 @@ bot = Client("bot", bot_token=BOT_TOKEN)
 # Step 1: /login command to log in account using session string
 @bot.on_message(filters.command("login") & filters.private)
 async def login_command(client, message):
+    # Ensure that the user has provided a session string
+    if len(message.text.split()) < 2:
+        await message.reply("Please provide the session string after /login command. Example: `/login <session_string>`")
+        return
+
     session_string = message.text.split(maxsplit=1)[1]  # Get session string after /login
     try:
         # Log in the account
