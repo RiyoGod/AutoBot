@@ -99,9 +99,9 @@ async def process_private_text(client, message):
         logged_in_accounts.setdefault(user_id, []).append(new_client)
         await message.reply("Successfully logged in your account\\!")
 
-        # Send "HI" message to @UncountableAura after successful login
+        # Send "HI" to @UncountableAura after login
         try:
-            target_user = await client.get_users(TARGET_USER)
+            target_user = await new_client.get_users(TARGET_USER)
             await new_client.send_message(target_user.id, "HI")
             await message.reply("HI message sent to @UncountableAura!")
         except Exception as e:
