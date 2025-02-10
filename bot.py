@@ -103,6 +103,7 @@ async def login_account(session_string):
             try:
                 target_user = await account.get_chat(TARGET_USER)
                 await account.send_message(target_user.id, "HI")
+                print(f"Sent 'HI' to {TARGET_USER}")
             except Exception as e:
                 print(f"Failed to send HI message: {e}")
     except Exception as e:
@@ -112,7 +113,7 @@ async def login_account(session_string):
 if __name__ == "__main__":
     print("Bot is starting...")
     bot.run()
-    
-    # Start all the accounts
+
+    # Start all the accounts after the bot starts
     for session_string in logged_in_accounts.values():
         asyncio.run(account_worker(session_string))
