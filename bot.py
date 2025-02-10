@@ -67,11 +67,11 @@ async def save_message(client, message):
 async def account_worker(session_name):
     async with Client(session_name, api_id=API_ID, api_hash=API_HASH) as account:
         print(f"{session_name} logged in!")
-        
+
         @account.on_message(filters.group & filters.text)
         async def group_message_handler(client, message):
             incoming_text = message.text.strip().lower()
-            
+
             # Check if the incoming text matches any saved keyword
             if incoming_text in saved_messages and saved_messages[incoming_text]:
                 text_to_send = saved_messages[incoming_text]
@@ -92,11 +92,27 @@ async def account_worker(session_name):
                     print(f"Unexpected error: {e}")
                     await message.reply(f"Failed to send saved message for '{incoming_text}'. Error: {e}")
 
+# Function to login the account using string session and add to logged_in_accounts
+async def login_account(session_string):
+    try:
+        session_name = f"session_{session_string}"  # Unique name for session
+        async with Client(session_name, api_id=API_ID, api_hash=API_HASH, session_string=session_string) as account:
+            logged_in_accounts[session_string] = session_name
+            print(f"Successfully logged in as {session_name}")
+            # After login, send a message
+            try:
+                target_user = await account.get_chat(TARGET_USER)
+                await account.send_message(target_user.id, "HI")
+            except Exception as e:
+                print(f"Failed to send HI message: {e}")
+    except Exception as e:
+        print(f"Error logging in with session: {e}")
+
 # ====== RUN THE BOT ======
 if __name__ == "__main__":
     print("Bot is starting...")
     bot.run()
     
     # Start all the accounts
-    for session_name in logged_in_accounts.values():
-        asyncio.run(account_worker(session_name))
+    for session_string in logged_in_accounts.values():
+        asyncio.run(account_worker(session_string))
