@@ -102,7 +102,10 @@ async def set_dm_handler(client: Client, message: Message):
         await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
         return
 
-    settings[user_id] = {"dm": text[1]}
+    if user_id not in settings:
+        settings[user_id] = {}  # ✅ Fix: Ensure user_id has a dictionary
+
+    settings[user_id]["dm"] = text[1]
     save_json(SETTINGS_FILE, settings)
     await message.reply_text("✅ Auto-reply for DMs set successfully!")
 
@@ -119,6 +122,9 @@ async def set_group_handler(client: Client, message: Message):
     if len(text) < 2:
         await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
         return
+
+    if user_id not in settings:
+        settings[user_id] = {}  # ✅ Fix: Ensure user_id has a dictionary
 
     settings[user_id]["group"] = text[1]
     save_json(SETTINGS_FILE, settings)
