@@ -9,9 +9,9 @@ from pyrogram.types import Message
 load_dotenv()
 
 # Bot configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN" , "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE")
+API_ID = int(os.getenv("API_ID" , 26416419))
+API_HASH = os.getenv("API_HASH" , "c109c77f5823c847b1aeb7fbd4990cc4")
 
 # File paths for storage
 ACCOUNTS_FILE = "accounts.json"
