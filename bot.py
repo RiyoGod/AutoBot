@@ -15,17 +15,18 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 
-# File-based storage (VPS-based)
+# File-based storage for user accounts & settings
+ACCOUNTS_FILE = "accounts.json"
 SETTINGS_FILE = "settings.json"
 
-# Configure logging (Print errors directly in terminal)
+# Configure logging (Only errors, no unnecessary logs)
 logging.basicConfig(
     level=logging.ERROR,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-# Load settings
+# Load JSON storage
 def load_json(filename):
     try:
         with open(filename, "r") as file:
@@ -33,72 +34,114 @@ def load_json(filename):
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
-# Save settings
+# Save JSON storage
 def save_json(filename, data):
     with open(filename, "w") as file:
         json.dump(data, file, indent=4)
 
-# Initialize settings
+# Initialize storage
+accounts = load_json(ACCOUNTS_FILE)
 settings = load_json(SETTINGS_FILE)
+
+# Store active clients
+active_clients = {}
 
 # Create bot client
 bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
+async def start_userbot(user_id, string_session):
+    """Starts a userbot session."""
+    try:
+        userbot = Client(name=str(user_id), session_string=string_session, api_id=API_ID, api_hash=API_HASH)
+        await userbot.start()
+        active_clients[user_id] = userbot
+        return userbot
+    except Exception as e:
+        logging.error(f"Userbot startup failed for {user_id}: {str(e)}")
+        return None
+
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     """Handles /start command."""
-    await message.reply_text("Welcome! Use /setdm to set an auto-reply for DMs.")
+    await message.reply_text("Welcome! Use /login to add an account.")
+
+@bot.on_message(filters.command("login"))
+async def login_handler(client: Client, message: Message):
+    """Handles user login request."""
+    user_id = message.from_user.id
+    await message.reply_text("Send your Pyrogram string session now:")
+
+    # Wait for session input
+    @bot.on_message(filters.private & filters.text)
+    async def session_receiver(client: Client, session_message: Message):
+        """Receives the Pyrogram string session and logs in the user."""
+        if session_message.from_user.id == user_id:
+            string_session = session_message.text.strip()
+
+            try:
+                userbot = await start_userbot(user_id, string_session)
+                if userbot:
+                    accounts[str(user_id)] = string_session
+                    save_json(ACCOUNTS_FILE, accounts)
+                    await session_message.reply_text(f"✅ Logged in as {userbot.me.first_name} ({userbot.me.id})")
+                else:
+                    await session_message.reply_text("❌ Login failed. Please check your session string.")
+            except Exception as e:
+                await session_message.reply_text(f"❌ Error: {str(e)}")
 
 @bot.on_message(filters.command("setdm"))
 async def set_dm_handler(client: Client, message: Message):
-    """Sets auto-reply message for direct messages."""
-    logging.error(f"Received /setdm command from {message.from_user.id}")
+    """Sets auto-reply message for DMs."""
+    user_id = str(message.from_user.id)
 
-    try:
-        text = message.text.split(maxsplit=1)
-        if len(text) < 2:
-            await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
-            return
+    if user_id not in accounts:
+        await message.reply_text("❌ You need to log in first using `/login`.")
+        return
 
-        settings["dm"] = text[1]
-        save_json(SETTINGS_FILE, settings)
-        logging.error(f"DM reply set to: {text[1]}")
+    text = message.text.split(maxsplit=1)
+    if len(text) < 2:
+        await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
+        return
 
-        await message.reply_text("✅ Auto-reply for DMs set successfully!")
-    except Exception as e:
-        logging.error(f"Error in /setdm command: {str(e)}")
+    settings[user_id] = {"dm": text[1]}
+    save_json(SETTINGS_FILE, settings)
+    await message.reply_text("✅ Auto-reply for DMs set successfully!")
 
 @bot.on_message(filters.command("setgroup"))
 async def set_group_handler(client: Client, message: Message):
     """Sets auto-reply message for group mentions."""
-    logging.error(f"Received /setgroup command from {message.from_user.id}")
+    user_id = str(message.from_user.id)
 
-    try:
-        text = message.text.split(maxsplit=1)
-        if len(text) < 2:
-            await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
-            return
+    if user_id not in accounts:
+        await message.reply_text("❌ You need to log in first using `/login`.")
+        return
 
-        settings["group"] = text[1]
-        save_json(SETTINGS_FILE, settings)
-        logging.error(f"Group reply set to: {text[1]}")
+    text = message.text.split(maxsplit=1)
+    if len(text) < 2:
+        await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
+        return
 
-        await message.reply_text("✅ Auto-reply for group mentions set successfully!")
-    except Exception as e:
-        logging.error(f"Error in /setgroup command: {str(e)}")
+    settings[user_id]["group"] = text[1]
+    save_json(SETTINGS_FILE, settings)
+    await message.reply_text("✅ Auto-reply for group mentions set successfully!")
 
-@bot.on_message(filters.private & ~filters.me)
-async def auto_reply_dm(client: Client, message: Message):
-    """Auto-replies to private messages (DMs) if a message is set."""
-    if "dm" in settings:
-        await message.reply_text(f"{settings['dm']}")
-
-@bot.on_message(filters.mentioned & ~filters.me)
-async def auto_reply_group(client: Client, message: Message):
-    """Auto-replies to group mentions if a message is set."""
-    if "group" in settings:
-        await message.reply_text(f"{settings['group']}")
+async def auto_reply():
+    """Handles auto-reply for logged-in users."""
+    while True:
+        for user_id, client in active_clients.items():
+            try:
+                async for message in client.get_chat_history(user_id, limit=1):
+                    if message.chat.type == "private" and "dm" in settings.get(user_id, {}):
+                        await message.reply(settings[user_id]["dm"])
+                    elif message.mentioned and "group" in settings.get(user_id, {}):
+                        await message.reply(settings[user_id]["group"])
+            except Exception as e:
+                logging.error(f"Error in auto-reply for {user_id}: {str(e)}")
+        await asyncio.sleep(5)  # Check every 5 seconds
 
 # Run the bot
 if __name__ == "__main__":
-    bot.run()
+    bot.start()
+    loop = asyncio.get_event_loop()
+    loop.create_task(auto_reply())
+    loop.run_forever()
