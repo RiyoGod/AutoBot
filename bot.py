@@ -1,42 +1,35 @@
 from pyrogram import Client, filters
+import html
 import asyncio
 
-# Configuration
-API_ID = 26416419
-API_HASH = "c109c77f5823c847b1aeb7fbd4990cc4"
-BOT_TOKEN = "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE"
-TARGET_USER = "@UncountableAura"  # Target user for testing message send
+# Escape HTML to avoid any issues with invalid tags
+def escape_html(text):
+    return html.escape(text)
 
-# Saved messages
-saved_messages = {}  # Dictionary to hold keyword-message pairs
-
-# Logins of accounts using their session strings
+# Save messages and sessions
+saved_messages = {}
 logged_in_accounts = {}
 
 # Initialize the bot
-bot = Client("bot", bot_token=BOT_TOKEN)
+bot = Client("bot", bot_token="8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE")
 
 # Step 1: /login command to log in account using session string
 @bot.on_message(filters.command("login") & filters.private)
 async def login_command(client, message):
-    # Ensure that the user has provided a session string
     if len(message.text.split()) < 2:
         await message.reply("Please provide the session string after /login command. Example: `/login <session_string>`")
         return
 
     session_string = message.text.split(maxsplit=1)[1]  # Get session string after /login
     try:
-        # Log in the account
         session_name = f"session_{session_string}"
-        async with Client(session_name, api_id=API_ID, api_hash=API_HASH, session_string=session_string) as account:
+        async with Client(session_name, api_id=26416419, api_hash="c109c77f5823c847b1aeb7fbd4990cc4", session_string=session_string) as account:
             logged_in_accounts[session_string] = session_name
             await message.reply(f"Successfully logged in with session `{session_string}`!")
-            print(f"Logged in as {session_name}")
             # Send a message after login to the target user (just as a test)
             try:
-                target_user = await account.get_chat(TARGET_USER)
+                target_user = await account.get_chat("@UncountableAura")
                 await account.send_message(target_user.id, "HI")
-                print("Sent 'HI' to the target user.")
             except Exception as e:
                 print(f"Error sending 'HI' message: {e}")
     except Exception as e:
@@ -59,13 +52,14 @@ async def save_message(client, message):
     if not message.text.startswith("/save"):
         keyword = message.text.strip().lower()
         if keyword in saved_messages and saved_messages[keyword] is None:
-            saved_messages[keyword] = message.text
-            await message.reply(f"Saved message for keyword `{keyword}`: {message.text}")
+            escaped_message = escape_html(message.text)  # Escape HTML for safe message
+            saved_messages[keyword] = escaped_message
+            await message.reply(f"Saved message for keyword `{keyword}`: {escaped_message}")
         return
 
 # Step 4: Account Worker to listen for keyword in group chats and send saved messages
 async def account_worker(session_name):
-    async with Client(session_name, api_id=API_ID, api_hash=API_HASH) as account:
+    async with Client(session_name, api_id=26416419, api_hash="c109c77f5823c847b1aeb7fbd4990cc4") as account:
         print(f"Account {session_name} is now listening for keywords...")
         @account.on_message(filters.group & filters.text)
         async def group_message_handler(client, message):
@@ -81,9 +75,8 @@ async def account_worker(session_name):
                     print("Message exceeds the length limit of 4096 characters.")
                     return
 
-                # Debugging to ensure valid message format
+                # Send the saved message in the group
                 try:
-                    # Send the saved message in the group
                     await message.reply(text_to_send)
                     print(f"Sent saved message for '{incoming_text}' in group.")
                 except Exception as e:
