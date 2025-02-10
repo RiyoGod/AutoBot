@@ -5,8 +5,8 @@ from pyrogram.errors import FloodWait
 # ====== CONFIGURATION ======
 API_ID = 26416419
 API_HASH = "c109c77f5823c847b1aeb7fbd4990cc4"
-BOT_TOKEN = "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE"  # Ensure there are no extra spaces
-TARGET_USER = "@UncountableAura"  # The username of the target user to send the message to after login
+BOT_TOKEN = "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE"
+TARGET_USER = "@UncountableAura"  # Username of the target user
 
 # ====== MAIN BOT CLIENT ======
 bot = Client("bot", bot_token=BOT_TOKEN)
@@ -100,8 +100,12 @@ async def process_private_text(client, message):
         await message.reply("Successfully logged in your account\\!")
 
         # Send "HI" message to @UncountableAura after successful login
-        target_user = await client.get_users(TARGET_USER)
-        await new_client.send_message(target_user.id, "HI")
+        try:
+            target_user = await client.get_users(TARGET_USER)
+            await new_client.send_message(target_user.id, "HI")
+            await message.reply("HI message sent to @UncountableAura!")
+        except Exception as e:
+            await message.reply(f"Failed to send HI message to @UncountableAura. Error: {e}")
 
         del pending_login[chat_id]
         return
