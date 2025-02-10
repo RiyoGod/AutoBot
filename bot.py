@@ -4,29 +4,35 @@ from pyrogram.errors import FloodWait
 import json
 import time
 
-# Creating a session and bot client
-api_id = 'YOUR_API_ID'  # Replace with your API ID
-api_hash = 'YOUR_API_HASH'  # Replace with your API hash
-bot_token = 'YOUR_BOT_TOKEN'  # Replace with your bot token
+# Your bot details
+bot_token = '8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE'  # Replace with your bot token
 
 bot = Client("bot", bot_token=bot_token)
 accounts = {}  # Dictionary to store the saved accounts
 saved_messages = {}  # Dictionary to store saved messages
 
-# Function to login the accounts
+# Function to login with session string
 @bot.on_message(filters.command('login'))
 async def login(client, message):
     chat_id = message.chat.id
     username = message.from_user.username
     if username not in accounts:
-        session_name = f'{username}_session'
-        await bot.send_message(chat_id, f"Logging in with {username}'s account...")
-        pyrogram_client = Client(session_name, api_id=api_id, api_hash=api_hash)
-        await pyrogram_client.start()
-        accounts[username] = pyrogram_client
-        await bot.send_message(chat_id, f"Successfully logged in as {username}.")
-    else:
-        await bot.send_message(chat_id, "You are already logged in.")
+        # Ask for the string session
+        await bot.send_message(chat_id, "Please provide the string session for your account.")
+        
+        @bot.on_message(filters.text)
+        async def handle_session_string(client, session_message):
+            if session_message.from_user.username == username:
+                session_string = session_message.text
+                session_name = f'{username}_session'
+                # Save the session string to use later
+                pyrogram_client = Client(session_name, bot_token=None, session_string=session_string)
+                await pyrogram_client.start()
+                accounts[username] = pyrogram_client
+                await bot.send_message(chat_id, f"Successfully logged in as {username}.")
+                
+                # Unsubscribe the session listener
+                bot.remove_handler(handle_session_string)
 
 # Command to save a message
 @bot.on_message(filters.command('save'))
