@@ -1,6 +1,6 @@
 import asyncio
 from pyrogram import Client, filters
-from pyrogram.errors import FloodWait
+from pyrogram.errors import PeerIdInvalid, ChannelInvalid, FloodWait
 
 # ====== CONFIGURATION ======
 API_ID = 26416419
@@ -8,18 +8,16 @@ API_HASH = "c109c77f5823c847b1aeb7fbd4990cc4"
 BOT_TOKEN = "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE"
 TARGET_USER = "@UncountableAura"  # Username of the target user
 
+# ====== GLOBAL STATE ======
+logged_in_accounts = {}  # This will store active accounts (string sessions)
+saved_messages = {}      # This will store the keyword-message pairs
+
 # ====== MAIN BOT CLIENT ======
 bot = Client("bot", bot_token=BOT_TOKEN)
 
-# ====== GLOBAL STATE ======
-pending_login = {}
-logged_in_accounts = {}
-pending_save = {}
-saved_messages = {}
-
 # ====== HANDLERS ======
 
-# /login command handler (private chat only)
+# /login command handler (private chat only) to login via string session
 @bot.on_message(filters.command("login") & filters.private)
 async def login_command(client, message):
     chat_id = message.chat.id
@@ -34,125 +32,71 @@ async def login_command(client, message):
         "```\n"
         "Replace API_ID and API_HASH with your credentials."
     )
-    pending_login[chat_id] = message.from_user.id
 
-# /save command handler (private chat only)
+# /save command handler (private chat only) to save messages
 @bot.on_message(filters.command("save") & filters.private)
 async def save_command(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply("Usage: `/save <keyword>`\nExample: `/save HI`")
+        await message.reply("Usage: `/save <keyword>`\nExample: `/save HII`")
         return
-    keyword = args[1].strip()
-    user_accounts = logged_in_accounts.get(user_id, [])
-    if not user_accounts:
-        await message.reply("You have no logged in accounts\\. Please use `/login` first\\.")
+    keyword = args[1].strip().lower()
+    if user_id not in logged_in_accounts:
+        await message.reply("You must log in first using `/login`.")
         return
-    if len(user_accounts) == 1:
-        pending_save[chat_id] = {"keyword": keyword, "account": user_accounts[0]}
-        await message.reply(
-            f"Using your only logged in account\\. Now send me the message content to be saved for keyword *{keyword}*\\."
-        )
-    else:
-        text = "Which account do you want to use? Send the number:\n"
-        for i, acct in enumerate(user_accounts, start=1):
-            try:
-                me = await acct.get_me()
-                text += f"{i}. {me.first_name} (@{me.username})\n"
-            except Exception:
-                text += f"{i}. Unknown Account\n"
-        pending_save[chat_id] = {"keyword": keyword, "account": None, "accounts": user_accounts, "step": "choose_account"}
-        await message.reply(text)
 
-# Process private text messages (for pending login or pending save)
+    # Wait for the actual message to save for the keyword
+    await message.reply(f"Now send me the message to save for keyword `{keyword}`.")
+    saved_messages[keyword] = None  # Initialize an empty entry
+
+# Save the actual message after keyword is set
 @bot.on_message(filters.private & filters.text)
-async def process_private_text(client, message):
-    chat_id = message.chat.id
+async def save_message(client, message):
     user_id = message.from_user.id
-
-    # Process pending login
-    if chat_id in pending_login:
-        session_string = message.text.strip()
-        new_client = Client(
-            f"session_{user_id}_{len(logged_in_accounts.get(user_id, [])) + 1}",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            session_string=session_string
-        )
-        try:
-            await new_client.start()
-        except Exception as e:
-            await message.reply(f"Failed to log in with the provided session string\\. Error: {e}")
-            del pending_login[chat_id]
-            return
-        logged_in_accounts.setdefault(user_id, []).append(new_client)
-        await message.reply("Successfully logged in your account\\!")
-
-        # Send "HI" to @UncountableAura after login
-        try:
-            target_user = await new_client.get_users(TARGET_USER)
-            await new_client.send_message(target_user.id, "HI")
-            await message.reply("HI message sent to @UncountableAura!")
-        except Exception as e:
-            await message.reply(f"Failed to send HI message to @UncountableAura. Error: {e}")
-
-        del pending_login[chat_id]
-        return
-
-    # Process pending save conversation
-    if chat_id in pending_save:
-        data = pending_save[chat_id]
-        if data.get("step") == "choose_account":
-            try:
-                choice = int(message.text.strip())
-            except ValueError:
-                await message.reply("Please send a valid number corresponding to the account\\.")
+    if user_id in logged_in_accounts:
+        for keyword, _ in saved_messages.items():
+            if saved_messages[keyword] is None:
+                saved_messages[keyword] = message.text
+                await message.reply(f"Saved message for `{keyword}`.")
                 return
-            accounts_list = data.get("accounts", [])
-            if choice < 1 or choice > len(accounts_list):
-                await message.reply("Invalid choice\\. Please send a valid number corresponding to the account\\.")
-                return
-            chosen_account = accounts_list[choice - 1]
-            data["account"] = chosen_account
-            data["step"] = "await_message"
-            await message.reply(
-                f"Account selected\\. Now send me the message content to be saved for keyword *{data['keyword']}*\\."
-            )
-            return
-        else:
-            keyword = data["keyword"]
-            chosen_account = data["account"]
-            saved_messages[keyword.lower()] = {"account": chosen_account, "message": message.text}
-            await message.reply(f"Saved message for keyword *{keyword}*\\.")
-            del pending_save[chat_id]
-            await message.reply(f"Successfully saved the message under the keyword *{keyword}*.\\")
-            return
 
-# Group message handler
-@bot.on_message(filters.group & filters.text)
-async def group_message_handler(client, message):
-    incoming = message.text.strip().lower()
-    print(f"Incoming message in group: {incoming}")  # Debugging: log incoming messages
-    if incoming in saved_messages:
-        entry = saved_messages[incoming]
-        account_client = entry["account"]
-        text_to_send = entry["message"]
-        print(f"Found saved message for keyword '{incoming}': {text_to_send}")  # Debugging: log the saved message
-        try:
-            await account_client.send_message(message.chat.id, text_to_send)
-            # Notify user when message is sent
-            await message.reply(f"Sent saved message for '{incoming}' in the group!")
-        except FloodWait as e:
-            await asyncio.sleep(e.x)
-        except Exception as e:
-            print(f"Error sending message for keyword '{incoming}': {e}")
-            await message.reply(f"Failed to send saved message for keyword '{incoming}'. Error: {e}")
-    else:
-        await message.reply(f"No saved message found for keyword '{incoming}'.")
+# ====== ACCOUNT CLIENT ======
+# Function to monitor the group and send saved messages
+async def account_worker(session_name):
+    async with Client(session_name, api_id=API_ID, api_hash=API_HASH) as account:
+        print(f"{session_name} logged in!")
+        
+        @account.on_message(filters.group & filters.text)
+        async def group_message_handler(client, message):
+            incoming_text = message.text.strip().lower()
+            
+            # Check if the incoming text matches any saved keyword
+            if incoming_text in saved_messages and saved_messages[incoming_text]:
+                text_to_send = saved_messages[incoming_text]
+                try:
+                    # Send the saved message in the group
+                    await message.reply(text_to_send)
+                    print(f"Sent saved message for '{incoming_text}'")  # Log the action
+                except PeerIdInvalid:
+                    print(f"Error: Invalid peer id. The account may not be a member of the group.")
+                    await message.reply(f"Error: The account is not a member of the group or cannot access it.")
+                except ChannelInvalid:
+                    print(f"Error: Invalid channel/group. The account may not have permission to reply.")
+                    await message.reply(f"Error: Invalid channel or group. The account cannot reply.")
+                except FloodWait as e:
+                    print(f"Error: Flood wait - the account is being rate-limited. Retry after {e.x} seconds.")
+                    await message.reply(f"Error: The account is being rate-limited. Please try again after {e.x} seconds.")
+                except Exception as e:
+                    print(f"Unexpected error: {e}")
+                    await message.reply(f"Failed to send saved message for '{incoming_text}'. Error: {e}")
 
 # ====== RUN THE BOT ======
 if __name__ == "__main__":
     print("Bot is starting...")
     bot.run()
+    
+    # Start all the accounts
+    for session_name in logged_in_accounts.values():
+        asyncio.run(account_worker(session_name))
