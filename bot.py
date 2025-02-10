@@ -1,160 +1,118 @@
 import os
 import asyncio
-import logging
-from dotenv import load_dotenv
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
+from pyrogram import Client, filters
 from pymongo import MongoClient
-from motor.motor_asyncio import AsyncIOMotorClient
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, CallbackContext
+from dotenv import load_dotenv
 
-# Load Environment Variables
+# Load environment variables
 load_dotenv()
+
+# Bot Configuration
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 MONGO_URI = os.getenv("MONGO_URI")
+DB_NAME = os.getenv("DB_NAME", "auto_reply_bot")
 
-# MongoDB Setup
-mongo_client = AsyncIOMotorClient(MONGO_URI)
-db = mongo_client["auto_reply_bot"]
+# Initialize MongoDB
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client[DB_NAME]
 accounts_collection = db["accounts"]
-auto_replies_collection = db["auto_replies"]
+responses_collection = db["responses"]
 
-# Bot Setup
-bot = Bot(BOT_TOKEN)
-app = Application.builder().token(BOT_TOKEN).build()
+# Initialize Bot Client
+bot = Client("auto_reply_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# Store active userbot sessions
+# Dictionary to store running userbots
 userbots = {}
 
-# Logging
-logging.basicConfig(level=logging.DEBUG)
+async def start_userbot(session_name, api_id, api_hash, phone_number):
+    """Logs in a user account and starts handling messages."""
+    userbot = Client(session_name, api_id=api_id, api_hash=api_hash, phone_number=phone_number)
+    await userbot.start()
+    userbots[session_name] = userbot
+    print(f"✅ Userbot {session_name} is running...")
 
+    @userbot.on_message(filters.mentioned & filters.group)
+    async def reply_to_mentions(client, message):
+        response = responses_collection.find_one({"type": "group"})
+        if response:
+            await message.reply_text(response["text"])
+        else:
+            await message.reply_text("Hello! How can I help?")
 
-async def start(update: Update, context: CallbackContext):
-    await update.message.reply_text("🤖 **Auto-Reply Bot** is running!\nUse /login to add accounts.")
+    @userbot.on_message(filters.private)
+    async def auto_reply(client, message):
+        response = responses_collection.find_one({"type": "dm"})
+        if response:
+            await message.reply_text(response["text"])
+        else:
+            await message.reply_text("Hey! I'm currently busy. I'll get back to you soon.")
 
+    await userbot.idle()
 
-async def login(update: Update, context: CallbackContext):
-    """Login a new userbot"""
-    args = context.args
-    if len(args) != 1:
-        await update.message.reply_text("Usage: `/login <STRING_SESSION>`")
+@bot.on_message(filters.command("login"))
+async def login_user(client, message):
+    """Command to log in a new user account."""
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("Usage: /login <phone_number>")
         return
-
-    string_session = args[0]
-    userbot_client = TelegramClient(StringSession(string_session), API_ID, API_HASH)
-
-    try:
-        await userbot_client.start()
-        me = await userbot_client.get_me()
-        userbots[me.id] = userbot_client
-
-        # Save to MongoDB
-        await accounts_collection.insert_one({"user_id": me.id, "string_session": string_session})
-        await update.message.reply_text(f"✅ **Logged in as {me.first_name}** (ID: `{me.id}`)")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ **Login Failed:** {str(e)}")
-
-
-async def accounts(update: Update, context: CallbackContext):
-    """Show logged-in accounts"""
-    accounts = await accounts_collection.find().to_list(None)
-    if not accounts:
-        await update.message.reply_text("🚫 No accounts are hosted.")
-        return
-
-    message = "📝 **Hosted Accounts:**\n"
-    for acc in accounts:
-        message += f"- `{acc['user_id']}`\n"
-
-    await update.message.reply_text(message)
-
-
-async def setgroup(update: Update, context: CallbackContext):
-    """Set auto-reply for group mentions"""
-    if len(context.args) < 2:
-        await update.message.reply_text("Usage: `/setgroup <GROUP_ID> <MESSAGE>`")
-        return
-
-    group_id = context.args[0]
-    reply_text = " ".join(context.args[1:])
-
-    await auto_replies_collection.update_one(
-        {"type": "group", "group_id": group_id},
-        {"$set": {"reply_text": reply_text}},
-        upsert=True,
-    )
-    await update.message.reply_text(f"✅ **Group auto-reply set for {group_id}**")
-
-
-async def setdm(update: Update, context: CallbackContext):
-    """Set auto-reply for DMs"""
-    if len(context.args) < 1:
-        await update.message.reply_text("Usage: `/setdm <MESSAGE>`")
-        return
-
-    reply_text = " ".join(context.args)
-    await auto_replies_collection.update_one(
-        {"type": "dm"},
-        {"$set": {"reply_text": reply_text}},
-        upsert=True,
-    )
-    await update.message.reply_text(f"✅ **DM auto-reply set!**")
-
-
-async def handle_messages(event):
-    """Handles userbot messages"""
-    sender = await event.get_sender()
-    user_id = sender.id
-
-    if event.is_private:
-        reply_data = await auto_replies_collection.find_one({"type": "dm"})
-        if reply_data:
-            await event.reply(reply_data["reply_text"])
     
-    elif event.is_group:
-        if event.message.mentioned:
-            reply_data = await auto_replies_collection.find_one({"type": "group", "group_id": event.chat_id})
-            if reply_data:
-                await event.reply(reply_data["reply_text"])
-
-
-async def start_userbots():
-    """Start listening for messages on userbot accounts"""
-    accounts = await accounts_collection.find().to_list(None)
-
-    for acc in accounts:
-        session = acc["string_session"]
-        client = TelegramClient(StringSession(session), API_ID, API_HASH)
-        
-        await client.start()
-        userbots[acc["user_id"]] = client
-        client.add_event_handler(handle_messages, events.NewMessage())
-
-    if userbots:
-        print(f"✅ {len(userbots)} userbot(s) started!")
-
-
-# Add Bot Commands
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("login", login))
-app.add_handler(CommandHandler("accounts", accounts))
-app.add_handler(CommandHandler("setgroup", setgroup))
-app.add_handler(CommandHandler("setdm", setdm))
-
-# Start everything
-async def main():
-    await start_userbots()
-    await app.run_polling()
-
-
-if __name__ == "__main__":
-    import asyncio
+    phone_number = args[1]
+    session_name = f"user_{phone_number}"
     
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    if session_name in userbots:
+        await message.reply_text("This account is already logged in.")
+        return
+    
+    accounts_collection.insert_one({"phone": phone_number, "session": session_name})
+    asyncio.create_task(start_userbot(session_name, API_ID, API_HASH, phone_number))
+    
+    await message.reply_text(f"Login initiated for {phone_number}. Check your Telegram for login confirmation.")
 
+@bot.on_message(filters.command("setgroup"))
+async def set_group_reply(client, message):
+    """Set the auto-reply for group mentions."""
+    text = message.text.split("/setgroup ", 1)[-1]
+    responses_collection.update_one({"type": "group"}, {"$set": {"text": text}}, upsert=True)
+    await message.reply_text("✅ Group mention response updated.")
+
+@bot.on_message(filters.command("setdm"))
+async def set_dm_reply(client, message):
+    """Set the auto-reply for DMs."""
+    text = message.text.split("/setdm ", 1)[-1]
+    responses_collection.update_one({"type": "dm"}, {"$set": {"text": text}}, upsert=True)
+    await message.reply_text("✅ DM response updated.")
+
+@bot.on_message(filters.command("accounts"))
+async def list_accounts(client, message):
+    """List all hosted user accounts."""
+    accounts = accounts_collection.find()
+    text = "**📌 Hosted Accounts:**\n"
+    for acc in accounts:
+        text += f"📌 {acc['phone']} (Session: {acc['session']})\n"
+    await message.reply_text(text)
+
+@bot.on_message(filters.command("logout"))
+async def logout_user(client, message):
+    """Logout a user account."""
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("Usage: /logout <phone_number>")
+        return
+    
+    phone_number = args[1]
+    session_name = f"user_{phone_number}"
+    
+    if session_name in userbots:
+        await userbots[session_name].stop()
+        del userbots[session_name]
+        accounts_collection.delete_one({"session": session_name})
+        await message.reply_text(f"✅ Logged out {phone_number}.")
+    else:
+        await message.reply_text("❌ This account is not logged in.")
+
+# Start the bot
+print("🚀 Bot is running...")
+bot.run()
