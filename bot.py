@@ -1,107 +1,97 @@
 import os
-import logging
-from dotenv import load_dotenv
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.errors import FloodWait
+import json
+import time
 
-# Load environment variables
-load_dotenv()
+# Creating a session and bot client
+api_id = 'YOUR_API_ID'  # Replace with your API ID
+api_hash = 'YOUR_API_HASH'  # Replace with your API hash
+bot_token = 'YOUR_BOT_TOKEN'  # Replace with your bot token
 
-# Bot configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+bot = Client("bot", bot_token=bot_token)
+accounts = {}  # Dictionary to store the saved accounts
+saved_messages = {}  # Dictionary to store saved messages
 
-# Simple in-memory storage (for demo purposes)
-user_sessions = {}
-settings = {}
+# Function to login the accounts
+@bot.on_message(filters.command('login'))
+async def login(client, message):
+    chat_id = message.chat.id
+    username = message.from_user.username
+    if username not in accounts:
+        session_name = f'{username}_session'
+        await bot.send_message(chat_id, f"Logging in with {username}'s account...")
+        pyrogram_client = Client(session_name, api_id=api_id, api_hash=api_hash)
+        await pyrogram_client.start()
+        accounts[username] = pyrogram_client
+        await bot.send_message(chat_id, f"Successfully logged in as {username}.")
+    else:
+        await bot.send_message(chat_id, "You are already logged in.")
 
-# Set up logging to show errors
-logging.basicConfig(level=logging.ERROR)
-
-# Create bot client
-bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# Handle /start command
-@bot.on_message(filters.command("start"))
-async def start_command(client: Client, message: Message):
-    await message.reply_text("Welcome! Use /login to log in using your Pyrogram session.")
-
-# Handle /login command to accept Pyrogram string session
-@bot.on_message(filters.command("login"))
-async def login_handler(client: Client, message: Message):
-    """Logs in user using Pyrogram session"""
-    user_id = message.from_user.id
-    await message.reply_text("Send your Pyrogram string session:")
-
-    @bot.on_message(filters.private & filters.text)
-    async def session_receiver(client: Client, session_message: Message):
-        """Receives and logs in the user."""
-        if session_message.from_user.id == user_id:
-            string_session = session_message.text.strip()
-
-            # Save session string to user_sessions
-            user_sessions[user_id] = string_session
-
-            try:
-                userbot = Client(f"userbot_{user_id}", session_string=string_session, api_id=API_ID, api_hash=API_HASH)
-                await userbot.start()
-                await session_message.reply_text(f"✅ Logged in as {userbot.me.first_name} ({userbot.me.id})")
-            except Exception as e:
-                await session_message.reply_text(f"❌ Error: {str(e)}")
-
-# Handle /setdm to set auto-reply for DMs
-@bot.on_message(filters.command("setdm"))
-async def set_dm_handler(client: Client, message: Message):
-    """Sets auto-reply message for DMs."""
-    user_id = message.from_user.id
-    if user_id not in user_sessions:
-        await message.reply_text("❌ You need to log in first using `/login`.")
+# Command to save a message
+@bot.on_message(filters.command('save'))
+async def save_message(client, message):
+    chat_id = message.chat.id
+    username = message.from_user.username
+    if username not in accounts:
+        await bot.send_message(chat_id, "You need to login first using /login.")
         return
 
-    text = message.text.split(maxsplit=1)
-    if len(text) < 2:
-        await message.reply_text("❌ Please provide a message. Usage: `/setdm Your message`")
+    content = message.text.split(maxsplit=1)
+    if len(content) > 1:
+        message_name = content[1]  # Unique name for the message
+        saved_messages[message_name] = message.text
+        await bot.send_message(chat_id, f"Message saved as {message_name}.")
+    else:
+        await bot.send_message(chat_id, "Please provide a unique message name like /save HI")
+
+# Command to select which account to use for sending the saved message
+@bot.on_message(filters.command('send'))
+async def send_saved_message(client, message):
+    chat_id = message.chat.id
+    username = message.from_user.username
+    if username not in accounts:
+        await bot.send_message(chat_id, "You need to login first using /login.")
         return
+    
+    content = message.text.split(maxsplit=1)
+    if len(content) > 1 and content[1] in saved_messages:
+        message_name = content[1]
+        saved_msg = saved_messages[message_name]
+        
+        # Asking which account to use
+        await bot.send_message(chat_id, "Which account would you like to use to send this message?")
+        accounts_list = list(accounts.keys())
+        for idx, account in enumerate(accounts_list, 1):
+            await bot.send_message(chat_id, f"{idx}. {account}")
+        
+        # Wait for the response from the user
+        await bot.listen(chat_id, filters.text)
+        
+        @bot.on_message(filters.text)
+        async def account_selector(client, message):
+            if message.text in accounts_list:
+                selected_account = message.text
+                pyrogram_client = accounts[selected_account]
+                
+                # Send message from the selected account in the group
+                try:
+                    await pyrogram_client.send_message(chat_id, saved_msg)
+                    await bot.send_message(chat_id, "Message sent successfully!")
+                except FloodWait as e:
+                    time.sleep(e.x)
+            else:
+                await bot.send_message(chat_id, "Invalid account selection.")
 
-    settings[user_id] = settings.get(user_id, {})
-    settings[user_id]["dm"] = text[1]
-    await message.reply_text("✅ Auto-reply for DMs set successfully!")
+# Monitor messages in groups and send saved message if match
+@bot.on_message(filters.text)
+async def group_monitor(client, message):
+    if message.text in saved_messages:
+        saved_msg = saved_messages[message.text]
+        try:
+            await message.reply(saved_msg)
+        except FloodWait as e:
+            time.sleep(e.x)
 
-# Handle /setgroup to set auto-reply for group mentions
-@bot.on_message(filters.command("setgroup"))
-async def set_group_handler(client: Client, message: Message):
-    """Sets auto-reply message for group mentions."""
-    user_id = message.from_user.id
-    if user_id not in user_sessions:
-        await message.reply_text("❌ You need to log in first using `/login`.")
-        return
-
-    text = message.text.split(maxsplit=1)
-    if len(text) < 2:
-        await message.reply_text("❌ Please provide a message. Usage: `/setgroup Your message`")
-        return
-
-    settings[user_id] = settings.get(user_id, {})
-    settings[user_id]["group"] = text[1]
-    await message.reply_text("✅ Auto-reply for group mentions set successfully!")
-
-# Handle incoming DMs (private messages)
-@bot.on_message(filters.private & filters.text)
-async def dm_auto_reply(client: Client, message: Message):
-    """Responds with the set DM auto-reply message."""
-    user_id = message.from_user.id
-    if user_id in settings and "dm" in settings[user_id]:
-        await message.reply_text(settings[user_id]["dm"])
-
-# Handle group mentions
-@bot.on_message(filters.group & filters.text)
-async def group_auto_reply(client: Client, message: Message):
-    """Responds with the set group auto-reply message when mentioned."""
-    user_id = message.from_user.id
-    if user_id in settings and "group" in settings[user_id]:
-        if message.mentioned:
-            await message.reply_text(settings[user_id]["group"])
-
-# Run the bot
-bot.run()
+if __name__ == "__main__":
+    bot.run()
