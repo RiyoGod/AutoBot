@@ -12,16 +12,9 @@ TARGET_USER = "@UncountableAura"  # Username of the target user
 bot = Client("bot", bot_token=BOT_TOKEN)
 
 # ====== GLOBAL STATE ======
-# Pending login state (chat_id -> user id)
 pending_login = {}
-
-# Logged-in user accounts (user id -> list of Client instances)
 logged_in_accounts = {}
-
-# Pending save state for /save (chat_id -> dict with conversation state)
 pending_save = {}
-
-# Saved messages (lowercase keyword -> dict with keys "account" and "message")
 saved_messages = {}
 
 # ====== HANDLERS ======
@@ -58,13 +51,11 @@ async def save_command(client, message):
         await message.reply("You have no logged in accounts\\. Please use `/login` first\\.")
         return
     if len(user_accounts) == 1:
-        # Use the only logged in account.
         pending_save[chat_id] = {"keyword": keyword, "account": user_accounts[0]}
         await message.reply(
             f"Using your only logged in account\\. Now send me the message content to be saved for keyword *{keyword}*\\."
         )
     else:
-        # Multiple accounts: ask the user to choose one.
         text = "Which account do you want to use? Send the number:\n"
         for i, acct in enumerate(user_accounts, start=1):
             try:
@@ -113,7 +104,6 @@ async def process_private_text(client, message):
     # Process pending save conversation
     if chat_id in pending_save:
         data = pending_save[chat_id]
-        # If expecting account choice:
         if data.get("step") == "choose_account":
             try:
                 choice = int(message.text.strip())
@@ -132,16 +122,15 @@ async def process_private_text(client, message):
             )
             return
         else:
-            # Save the message content.
             keyword = data["keyword"]
             chosen_account = data["account"]
             saved_messages[keyword.lower()] = {"account": chosen_account, "message": message.text}
             await message.reply(f"Saved message for keyword *{keyword}*\\.")
             del pending_save[chat_id]
+            await message.reply(f"Successfully saved the message under the keyword *{keyword}*.\\")
             return
 
 # Group message handler
-# When a group message (exactly) equals a saved keyword (case-insensitive), send the saved message.
 @bot.on_message(filters.group & filters.text)
 async def group_message_handler(client, message):
     incoming = message.text.strip().lower()
@@ -153,10 +142,15 @@ async def group_message_handler(client, message):
         print(f"Found saved message for keyword '{incoming}': {text_to_send}")  # Debugging: log the saved message
         try:
             await account_client.send_message(message.chat.id, text_to_send)
+            # Notify user when message is sent
+            await message.reply(f"Sent saved message for '{incoming}' in the group!")
         except FloodWait as e:
             await asyncio.sleep(e.x)
         except Exception as e:
             print(f"Error sending message for keyword '{incoming}': {e}")
+            await message.reply(f"Failed to send saved message for keyword '{incoming}'. Error: {e}")
+    else:
+        await message.reply(f"No saved message found for keyword '{incoming}'.")
 
 # ====== RUN THE BOT ======
 if __name__ == "__main__":
