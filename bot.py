@@ -1,119 +1,86 @@
-import asyncio
 from pyrogram import Client, filters
-from pyrogram.errors import PeerIdInvalid, ChannelInvalid, FloodWait
+import asyncio
 
-# ====== CONFIGURATION ======
+# Configuration
 API_ID = 26416419
 API_HASH = "c109c77f5823c847b1aeb7fbd4990cc4"
 BOT_TOKEN = "8180105447:AAGgzlLeYPCotZRvBt5XP2SXQCsJaQP9CEE"
-TARGET_USER = "@UncountableAura"  # Username of the target user
+TARGET_USER = "@UncountableAura"  # Target user for testing message send
 
-# ====== GLOBAL STATE ======
-logged_in_accounts = {}  # This will store active accounts (string sessions)
-saved_messages = {}      # This will store the keyword-message pairs
+# Saved messages
+saved_messages = {}  # Dictionary to hold keyword-message pairs
 
-# ====== MAIN BOT CLIENT ======
+# Logins of accounts using their session strings
+logged_in_accounts = {}
+
+# Initialize the bot
 bot = Client("bot", bot_token=BOT_TOKEN)
 
-# ====== HANDLERS ======
-
-# /login command handler (private chat only) to login via string session
+# Step 1: /login command to log in account using session string
 @bot.on_message(filters.command("login") & filters.private)
 async def login_command(client, message):
-    chat_id = message.chat.id
-    await message.reply(
-        "Please send me your string session for your account.\n\n"
-        "If you don't have one, generate it using a script like this:\n\n"
-        "```python\n"
-        "from pyrogram import Client\n\n"
-        "app = Client(\"my_account\", api_id=API_ID, api_hash=API_HASH)\n"
-        "with app:\n"
-        "    print(app.export_session_string())\n"
-        "```\n"
-        "Replace API_ID and API_HASH with your credentials."
-    )
+    session_string = message.text.split(maxsplit=1)[1]  # Get session string after /login
+    try:
+        # Log in the account
+        session_name = f"session_{session_string}"
+        async with Client(session_name, api_id=API_ID, api_hash=API_HASH, session_string=session_string) as account:
+            logged_in_accounts[session_string] = session_name
+            await message.reply(f"Successfully logged in with session `{session_string}`!")
+            print(f"Logged in as {session_name}")
+            # Send a message after login to the target user (just as a test)
+            try:
+                target_user = await account.get_chat(TARGET_USER)
+                await account.send_message(target_user.id, "HI")
+                print("Sent 'HI' to the target user.")
+            except Exception as e:
+                print(f"Error sending 'HI' message: {e}")
+    except Exception as e:
+        print(f"Failed to login with session string: {e}")
+        await message.reply(f"Failed to login. Error: {e}")
 
-# /save command handler (private chat only) to save messages
+# Step 2: /save command to save a message under a keyword
 @bot.on_message(filters.command("save") & filters.private)
 async def save_command(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        await message.reply("Usage: `/save <keyword>`\nExample: `/save HII`")
+    if len(message.text.split()) < 2:
+        await message.reply("Usage: /save <keyword>")
         return
-    keyword = args[1].strip().lower()
-    if user_id not in logged_in_accounts:
-        await message.reply("You must log in first using `/login`.")
-        return
+    keyword = message.text.split(maxsplit=1)[1]
+    saved_messages[keyword] = None  # Initialize an empty message for the keyword
+    await message.reply(f"Now, send me the message you want to save for keyword `{keyword}`.")
 
-    # Wait for the actual message to save for the keyword
-    await message.reply(f"Now send me the message to save for keyword `{keyword}`.")
-    saved_messages[keyword] = None  # Initialize an empty entry
-
-# Save the actual message after keyword is set
+# Step 3: Store the message after saving it for the keyword
 @bot.on_message(filters.private & filters.text)
 async def save_message(client, message):
-    user_id = message.from_user.id
-    if user_id in logged_in_accounts:
-        for keyword, _ in saved_messages.items():
-            if saved_messages[keyword] is None:
-                saved_messages[keyword] = message.text
-                await message.reply(f"Saved message for `{keyword}`.")
-                return
+    if not message.text.startswith("/save"):
+        keyword = message.text.strip().lower()
+        if keyword in saved_messages and saved_messages[keyword] is None:
+            saved_messages[keyword] = message.text
+            await message.reply(f"Saved message for keyword `{keyword}`: {message.text}")
+        return
 
-# ====== ACCOUNT CLIENT ======
-# Function to monitor the group and send saved messages
+# Step 4: Account Worker to listen for keyword in group chats and send saved messages
 async def account_worker(session_name):
     async with Client(session_name, api_id=API_ID, api_hash=API_HASH) as account:
-        print(f"{session_name} logged in!")
-
+        print(f"Account {session_name} is now listening for keywords...")
         @account.on_message(filters.group & filters.text)
         async def group_message_handler(client, message):
             incoming_text = message.text.strip().lower()
-
-            # Check if the incoming text matches any saved keyword
             if incoming_text in saved_messages and saved_messages[incoming_text]:
                 text_to_send = saved_messages[incoming_text]
                 try:
                     # Send the saved message in the group
                     await message.reply(text_to_send)
-                    print(f"Sent saved message for '{incoming_text}'")  # Log the action
-                except PeerIdInvalid:
-                    print(f"Error: Invalid peer id. The account may not be a member of the group.")
-                    await message.reply(f"Error: The account is not a member of the group or cannot access it.")
-                except ChannelInvalid:
-                    print(f"Error: Invalid channel/group. The account may not have permission to reply.")
-                    await message.reply(f"Error: Invalid channel or group. The account cannot reply.")
-                except FloodWait as e:
-                    print(f"Error: Flood wait - the account is being rate-limited. Retry after {e.x} seconds.")
-                    await message.reply(f"Error: The account is being rate-limited. Please try again after {e.x} seconds.")
+                    print(f"Sent saved message for '{incoming_text}' in group.")
                 except Exception as e:
-                    print(f"Unexpected error: {e}")
-                    await message.reply(f"Failed to send saved message for '{incoming_text}'. Error: {e}")
+                    print(f"Error sending saved message in group: {e}")
 
-# Function to login the account using string session and add to logged_in_accounts
-async def login_account(session_string):
-    try:
-        session_name = f"session_{session_string}"  # Unique name for session
-        async with Client(session_name, api_id=API_ID, api_hash=API_HASH, session_string=session_string) as account:
-            logged_in_accounts[session_string] = session_name
-            print(f"Successfully logged in as {session_name}")
-            # After login, send a message
-            try:
-                target_user = await account.get_chat(TARGET_USER)
-                await account.send_message(target_user.id, "HI")
-                print(f"Sent 'HI' to {TARGET_USER}")
-            except Exception as e:
-                print(f"Failed to send HI message: {e}")
-    except Exception as e:
-        print(f"Error logging in with session: {e}")
-
-# ====== RUN THE BOT ======
-if __name__ == "__main__":
-    print("Bot is starting...")
-    bot.run()
-
-    # Start all the accounts after the bot starts
+# Start listening for groups and checking for keywords
+async def start_account_listeners():
     for session_string in logged_in_accounts.values():
-        asyncio.run(account_worker(session_string))
+        await account_worker(session_string)
+
+# Run the bot
+if __name__ == "__main__":
+    bot.run()
+    # Start the account listeners after the bot is running
+    asyncio.run(start_account_listeners())
