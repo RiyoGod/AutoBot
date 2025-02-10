@@ -1,8 +1,10 @@
 import os
 import asyncio
-from pyrogram import Client, filters
-from pymongo import MongoClient
+import logging
 from dotenv import load_dotenv
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from motor.motor_asyncio import AsyncIOMotorClient
 
 # Load environment variables
 load_dotenv()
@@ -15,104 +17,141 @@ MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME", "auto_reply_bot")
 
 # Initialize MongoDB
-mongo_client = MongoClient(MONGO_URI)
+mongo_client = AsyncIOMotorClient(MONGO_URI)
 db = mongo_client[DB_NAME]
-accounts_collection = db["accounts"]
-responses_collection = db["responses"]
+accounts_col = db["accounts"]
+replies_col = db["replies"]
 
-# Initialize Bot Client
-bot = Client("auto_reply_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# Initialize Bot
+bot = Client("AutoReplyBot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
 
-# Dictionary to store running userbots
-userbots = {}
+# Dictionary to store running user sessions
+user_sessions = {}
 
-async def start_userbot(session_name, api_id, api_hash, phone_number):
-    """Logs in a user account and starts handling messages."""
-    userbot = Client(session_name, api_id=api_id, api_hash=api_hash, phone_number=phone_number)
-    await userbot.start()
-    userbots[session_name] = userbot
-    print(f"✅ Userbot {session_name} is running...")
+### ✅ Command: /start
+@bot.on_message(filters.command("start"))
+async def start_handler(_, message: Message):
+    await message.reply_text("Welcome! Use /login to add an account.")
 
-    @userbot.on_message(filters.mentioned & filters.group)
-    async def reply_to_mentions(client, message):
-        response = responses_collection.find_one({"type": "group"})
-        if response:
-            await message.reply_text(response["text"])
-        else:
-            await message.reply_text("Hello! How can I help?")
-
-    @userbot.on_message(filters.private)
-    async def auto_reply(client, message):
-        response = responses_collection.find_one({"type": "dm"})
-        if response:
-            await message.reply_text(response["text"])
-        else:
-            await message.reply_text("Hey! I'm currently busy. I'll get back to you soon.")
-
-    await userbot.idle()
-
+### ✅ Command: /login (Add User Account)
 @bot.on_message(filters.command("login"))
-async def login_user(client, message):
-    """Command to log in a new user account."""
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("Usage: /login <phone_number>")
-        return
-    
-    phone_number = args[1]
-    session_name = f"user_{phone_number}"
-    
-    if session_name in userbots:
-        await message.reply_text("This account is already logged in.")
-        return
-    
-    accounts_collection.insert_one({"phone": phone_number, "session": session_name})
-    asyncio.create_task(start_userbot(session_name, API_ID, API_HASH, phone_number))
-    
-    await message.reply_text(f"Login initiated for {phone_number}. Check your Telegram for login confirmation.")
+async def login_handler(_, message: Message):
+    await message.reply_text(
+        "To log in, send your **PHONE NUMBER** (with country code). Example: `+123456789`",
+        parse_mode="markdown"
+    )
 
-@bot.on_message(filters.command("setgroup"))
-async def set_group_reply(client, message):
-    """Set the auto-reply for group mentions."""
-    text = message.text.split("/setgroup ", 1)[-1]
-    responses_collection.update_one({"type": "group"}, {"$set": {"text": text}}, upsert=True)
-    await message.reply_text("✅ Group mention response updated.")
+    def check(m: Message):
+        return m.chat.id == message.chat.id and m.text.startswith("+")
 
-@bot.on_message(filters.command("setdm"))
-async def set_dm_reply(client, message):
-    """Set the auto-reply for DMs."""
-    text = message.text.split("/setdm ", 1)[-1]
-    responses_collection.update_one({"type": "dm"}, {"$set": {"text": text}}, upsert=True)
-    await message.reply_text("✅ DM response updated.")
+    phone_message = await bot.listen(message.chat.id, check=check)
+    phone_number = phone_message.text.strip()
 
+    # Create a new Pyrogram Client for the user
+    session_name = f"user_{message.chat.id}"
+    user_client = Client(session_name, api_id=API_ID, api_hash=API_HASH)
+
+    await user_client.connect()
+    code = await user_client.send_code(phone_number)
+
+    await message.reply_text("Enter the **login code** sent to your Telegram.")
+
+    code_message = await bot.listen(message.chat.id)
+    login_code = code_message.text.strip()
+
+    try:
+        await user_client.sign_in(phone_number, login_code)
+        user_sessions[message.chat.id] = user_client
+
+        # Save to MongoDB
+        await accounts_col.update_one(
+            {"user_id": message.chat.id},
+            {"$set": {"phone_number": phone_number}},
+            upsert=True
+        )
+
+        await message.reply_text("✅ Login successful!")
+    except Exception as e:
+        await message.reply_text(f"❌ Login failed: {e}")
+
+### ✅ Command: /accounts (List Logged-in Accounts)
 @bot.on_message(filters.command("accounts"))
-async def list_accounts(client, message):
-    """List all hosted user accounts."""
-    accounts = accounts_collection.find()
-    text = "**📌 Hosted Accounts:**\n"
-    for acc in accounts:
-        text += f"📌 {acc['phone']} (Session: {acc['session']})\n"
-    await message.reply_text(text)
-
-@bot.on_message(filters.command("logout"))
-async def logout_user(client, message):
-    """Logout a user account."""
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("Usage: /logout <phone_number>")
+async def list_accounts(_, message: Message):
+    accounts = await accounts_col.find().to_list(length=100)
+    if not accounts:
+        await message.reply_text("❌ No accounts logged in.")
         return
     
-    phone_number = args[1]
-    session_name = f"user_{phone_number}"
+    msg = "🔹 **Logged-in Accounts:**\n"
+    for acc in accounts:
+        msg += f"- `{acc['phone_number']}`\n"
     
-    if session_name in userbots:
-        await userbots[session_name].stop()
-        del userbots[session_name]
-        accounts_collection.delete_one({"session": session_name})
-        await message.reply_text(f"✅ Logged out {phone_number}.")
-    else:
-        await message.reply_text("❌ This account is not logged in.")
+    await message.reply_text(msg)
 
-# Start the bot
-print("🚀 Bot is running...")
+### ✅ Command: /setgroup (Set Auto-reply for Group Mentions)
+@bot.on_message(filters.command("setgroup"))
+async def set_group_reply(_, message: Message):
+    reply_text = message.text.replace("/setgroup", "").strip()
+    if not reply_text:
+        await message.reply_text("❌ Please provide a reply message.")
+        return
+
+    await replies_col.update_one(
+        {"user_id": message.chat.id, "type": "group"},
+        {"$set": {"reply_text": reply_text}},
+        upsert=True
+    )
+
+    await message.reply_text("✅ Group auto-reply set!")
+
+### ✅ Command: /setdm (Set Auto-reply for Direct Messages)
+@bot.on_message(filters.command("setdm"))
+async def set_dm_reply(_, message: Message):
+    reply_text = message.text.replace("/setdm", "").strip()
+    if not reply_text:
+        await message.reply_text("❌ Please provide a reply message.")
+        return
+
+    await replies_col.update_one(
+        {"user_id": message.chat.id, "type": "dm"},
+        {"$set": {"reply_text": reply_text}},
+        upsert=True
+    )
+
+    await message.reply_text("✅ DM auto-reply set!")
+
+### ✅ Auto-reply in Groups
+@bot.on_message(filters.mentioned & filters.group)
+async def group_reply_handler(_, message: Message):
+    user_id = message.from_user.id
+    reply_data = await replies_col.find_one({"user_id": user_id, "type": "group"})
+    
+    if reply_data:
+        await message.reply_text(reply_data["reply_text"])
+
+### ✅ Auto-reply in Direct Messages
+@bot.on_message(filters.private)
+async def dm_reply_handler(_, message: Message):
+    user_id = message.from_user.id
+    reply_data = await replies_col.find_one({"user_id": user_id, "type": "dm"})
+    
+    if reply_data:
+        await message.reply_text(reply_data["reply_text"])
+
+### ✅ Command: /logout (Remove an Account)
+@bot.on_message(filters.command("logout"))
+async def logout_handler(_, message: Message):
+    if message.chat.id not in user_sessions:
+        await message.reply_text("❌ No active session found.")
+        return
+    
+    user_client = user_sessions.pop(message.chat.id)
+    await user_client.disconnect()
+
+    await accounts_col.delete_one({"user_id": message.chat.id})
+
+    await message.reply_text("✅ Logged out successfully!")
+
+# Run the bot
+print("✅ Bot is running...")
 bot.run()
