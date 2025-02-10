@@ -46,9 +46,6 @@ settings = load_json(SETTINGS_FILE)
 # Store active clients
 active_clients = {}
 
-# Create bot client
-bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
 async def start_userbot(user_id, string_session):
     """Starts a userbot session."""
     try:
@@ -59,6 +56,9 @@ async def start_userbot(user_id, string_session):
     except Exception as e:
         logging.error(f"Userbot startup failed for {user_id}: {str(e)}")
         return None
+
+# Create bot client
+bot = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
@@ -71,7 +71,6 @@ async def login_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await message.reply_text("Send your Pyrogram string session now:")
 
-    # Wait for session input
     @bot.on_message(filters.private & filters.text)
     async def session_receiver(client: Client, session_message: Message):
         """Receives the Pyrogram string session and logs in the user."""
@@ -131,12 +130,24 @@ async def auto_reply():
         for user_id, client in active_clients.items():
             try:
                 async for message in client.get_chat_history(user_id, limit=1):
-                    if message.chat.type == "private" and "dm" in settings.get(user_id, {}):
-                        await message.reply(settings[user_id]["dm"])
-                    elif message.mentioned and "group" in settings.get(user_id, {}):
-                        await message.reply(settings[user_id]["group"])
+                    chat = await client.get_chat(message.chat.id)
+
+                    # Skip if chat is invalid or user has not met the peer
+                    if not chat or chat.is_deleted or chat.is_scam or chat.is_restricted:
+                        continue
+
+                    # DM auto-reply
+                    if message.chat.type == "private" and "dm" in settings.get(str(user_id), {}):
+                        await client.send_message(message.chat.id, settings[str(user_id)]["dm"])
+
+                    # Group mention auto-reply
+                    elif message.mentioned and "group" in settings.get(str(user_id), {}):
+                        await client.send_message(message.chat.id, settings[str(user_id)]["group"])
+
             except Exception as e:
-                logging.error(f"Error in auto-reply for {user_id}: {str(e)}")
+                if "PEER_ID_INVALID" not in str(e):  # Ignore known issue for unknown chats
+                    logging.error(f"Error in auto-reply for {user_id}: {str(e)}")
+
         await asyncio.sleep(5)  # Check every 5 seconds
 
 # Run the bot
